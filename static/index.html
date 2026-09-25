@@ -5,30 +5,249 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>传染病暴发调查与接触网络</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1f2937; }
-    main { max-width: 820px; margin: auto; }
-    pre { background: #f3f4f6; padding: 1rem; border-radius: 8px; overflow-x: auto; }
-    button { padding: .5rem .8rem; cursor: pointer; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1f2937; background: #f9fafb; }
+    main { max-width: 960px; margin: auto; }
+    h1 { font-size: 1.5rem; }
+    h2 { font-size: 1.15rem; margin-top: 2rem; border-bottom: 2px solid #e5e7eb; padding-bottom: .3rem; }
+    section.card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 1rem 1.25rem; margin: 1rem 0; }
+    table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+    th, td { border: 1px solid #e5e7eb; padding: .4rem .6rem; text-align: left; vertical-align: top; }
+    th { background: #f3f4f6; }
+    .gen { display: inline-block; min-width: 3.2rem; text-align: center; border-radius: 999px; padding: .1rem .5rem; font-size: .8rem; color: #fff; background: #2563eb; }
+    .gen.g0 { background: #059669; }
+    .tag { display: inline-block; border-radius: 4px; padding: .05rem .45rem; font-size: .75rem; margin-right: .25rem; }
+    .tag.pending { background: #fef3c7; color: #92400e; }
+    .tag.released { background: #e0e7ff; color: #3730a3; }
+    .tag.other { background: #e5e7eb; color: #374151; }
+    .reject { border-left: 4px solid #dc2626; background: #fef2f2; padding: .5rem .8rem; margin: .4rem 0; border-radius: 4px; }
+    form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .5rem; align-items: end; }
+    label { font-size: .8rem; color: #4b5563; display: flex; flex-direction: column; gap: .2rem; }
+    input, button { padding: .45rem .6rem; font-size: .9rem; }
+    button { cursor: pointer; background: #2563eb; color: #fff; border: none; border-radius: 6px; }
+    button.secondary { background: #6b7280; }
+    pre { background: #1f2937; color: #e5e7eb; padding: 1rem; border-radius: 8px; overflow-x: auto; font-size: .8rem; }
+    .muted { color: #6b7280; font-size: .85rem; }
+    .ok { color: #059669; }
+    .err { color: #dc2626; }
+    details { margin-top: 1rem; }
   </style>
 </head>
 <body>
 <main>
   <h1>传染病暴发调查与接触网络</h1>
-  <p>这是最小演示页面。使用浏览器或 curl 调用 JSON API。</p>
-  <p><button onclick="checkHealth()">检查服务状态</button></p>
+  <p class="muted">病例确认时登记来源病例与暴露时间地点，系统自动串出传播链与代际；同一人对同一来源多次暴露只保留最近一次。</p>
+  <p>
+    <button onclick="loadNetwork()">刷新传播网络</button>
+    <button class="secondary" onclick="checkHealth()">检查服务状态</button>
+  </p>
+
+  <section class="card">
+    <h2>传播链</h2>
+    <div id="chains">加载中…</div>
+  </section>
+
+  <section class="card">
+    <h2>待处理接触者</h2>
+    <div id="pending">加载中…</div>
+  </section>
+
+  <section class="card">
+    <h2>未建立的暴露关系</h2>
+    <div id="rejected" class="muted">加载中…</div>
+  </section>
+
+  <section class="card">
+    <h2>登记暴露关系</h2>
+    <form id="exposure-form" onsubmit="return registerExposure(event)">
+      <label>下游确诊病例 ID<input name="case_id" required></label>
+      <label>来源病例 ID<input name="source_case_id" required></label>
+      <label>暴露日期<input name="exposure_date" type="date" required></label>
+      <label>暴露地点<input name="location" required></label>
+      <label>暴露人 ID（可留默认病例本人）<input name="person_id" placeholder="留空取病例本人"></label>
+      <button type="submit">登记</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>解除接触者（未感染）</h2>
+    <form id="release-form" onsubmit="return releaseContact(event)">
+      <label>接触者 ID<input name="contact_id" required></label>
+      <label>解除结论（如：未感染）<input name="outcome" value="未感染" required></label>
+      <button type="submit">解除</button>
+    </form>
+    <p class="muted">解除后接触者不再出现在待处理列表，但其与病例的上下游关系仍保留在传播链中可查。</p>
+  </section>
+
+  <details class="card">
+    <summary>病例与接触者录入（无 curl 时快速造数）</summary>
+    <h2>新建病例</h2>
+    <form onsubmit="return postCreate(event, 'cases')">
+      <label>病例 ID（可留空）<input name="id"></label>
+      <label>人员 ID<input name="person_id" required></label>
+      <label>发病日期<input name="onset_date" type="date" required></label>
+      <label>地点<input name="location" required></label>
+      <label>症状<input name="symptoms" value="fever" required></label>
+      <button type="submit">新建（reported）</button>
+    </form>
+    <h2>推进病例（分诊 → 确诊）</h2>
+    <form onsubmit="return triage(event)">
+      <label>病例 ID<input name="case_id" required></label>
+      <label>分诊医生<input name="clinician" value="C-1" required></label>
+      <button type="submit">分诊</button>
+    </form>
+    <form onsubmit="return confirmCase(event)">
+      <label>病例 ID<input name="case_id" required></label>
+      <label>实验室 ID<input name="lab_id" value="L-1" required></label>
+      <label>结果<input name="result" value="positive" required></label>
+      <button type="submit">实验室确诊</button>
+    </form>
+    <h2>登记接触者</h2>
+    <form onsubmit="return postCreate(event, 'contacts')">
+      <label>关联病例 ID<input name="case_id" required></label>
+      <label>接触人员 ID<input name="person_id" required></label>
+      <label>暴露开始日期<input name="exposure_start" type="date" required></label>
+      <button type="submit">新建接触者</button>
+    </form>
+  </details>
+
   <pre id="result">等待操作</pre>
-  <h2>常用接口</h2>
-  <pre>GET  /health
-GET  /api/&lt;kind&gt;
-POST /api/&lt;kind&gt;
-GET  /api/entities/&lt;id&gt;
-POST /api/entities/&lt;id&gt;/actions</pre>
 </main>
 <script>
-async function checkHealth() {
-  const response = await fetch('/health');
-  document.getElementById('result').textContent = JSON.stringify(await response.json(), null, 2);
+const HEADERS = {'Content-Type': 'application/json', 'X-User-Id': 'web-investigator', 'X-Role': 'investigator'};
+
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 }
+
+async function api(path, options) {
+  const response = await fetch(path, options);
+  const payload = await response.json();
+  if (!response.ok) throw Object.assign(new Error(payload.error || ('HTTP ' + response.status)), {payload});
+  return payload;
+}
+
+function contactTags(contact) {
+  return '<span class="tag ' + (contact.status === 'released' ? 'released' : (['identified', 'following'].includes(contact.status) ? 'pending' : 'other')) + '">' + esc(contact.status) + '</span>';
+}
+
+async function loadNetwork() {
+  try {
+    const network = await api('/api/network');
+    document.getElementById('chains').innerHTML = network.chains.length
+      ? network.chains.map((chain) => `
+        <h3>传播链 #${chain.chain_id} <span class="muted">共 ${chain.generations + 1} 代 / ${chain.members.length} 名成员</span></h3>
+        <table>
+          <thead><tr><th>代际</th><th>病例</th><th>状态</th><th>发病日期</th><th>地点</th><th>上游来源</th><th>下游病例</th><th>接触者（待处理 / 已解除）</th></tr></thead>
+          <tbody>${chain.members.map((m) => `
+            <tr>
+              <td><span class="gen ${m.generation === 0 ? 'g0' : ''}">第${m.generation}代</span></td>
+              <td>${esc(m.person_id)}<div class="muted">${esc(m.case_id)}</div></td>
+              <td>${esc(m.status)}</td>
+              <td>${esc(m.onset_date)}</td>
+              <td>${esc(m.location)}</td>
+              <td>${m.upstream_case_ids.map(esc).join(', ') || '—'}</td>
+              <td>${m.downstream_case_ids.map(esc).join(', ') || '—'}</td>
+              <td>
+                ${m.pending_contacts.map((c) => contactTags(c) + esc(c.person_id)).join(' ') || '<span class="muted">无待处理</span>'}
+                ${m.released_contacts.length ? '<div class="muted">已解除：' + m.released_contacts.map((c) => contactTags(c) + esc(c.person_id) + '（' + esc(c.outcome || '') + '）').join('；') + '</div>' : ''}
+              </td>
+            </tr>`).join('')}
+          </tbody>
+        </table>`).join('')
+      : '<p class="muted">暂无已建立的传播关系。先确诊两例病例，再登记暴露关系。</p>';
+
+    const pending = network.pending_contacts;
+    document.getElementById('pending').innerHTML = pending.length
+      ? `<table><thead><tr><th>接触者</th><th>人员</th><th>状态</th><th>关联病例</th><th>暴露开始</th></tr></thead><tbody>${pending.map((c) => `
+          <tr><td>${esc(c.id)}</td><td>${esc(c.person_id)}</td><td>${contactTags(c)} ${esc(c.status)}</td><td>${esc(c.case_id)}</td><td>${esc(c.exposure_start)}</td></tr>`).join('')}
+        </tbody></table>`
+      : '<p class="muted">没有待处理接触者。</p>';
+
+    document.getElementById('rejected').innerHTML = network.rejected_exposures.length
+      ? network.rejected_exposures.map((r) => `
+        <div class="reject"><strong>关系未建立</strong>：${esc(r.person_id)} 于 ${esc(r.exposure_date)} 在 ${esc(r.location)} 暴露于 ${esc(r.source_case_id)}（下游病例 ${esc(r.case_id)}）
+          <ul>${r.reasons.map((reason) => '<li>' + esc(reason) + '</li>').join('')}</ul>
+          <div class="muted">登记记录 ${esc(r.id)}</div>
+        </div>`).join('')
+      : '所有登记的暴露关系均已建立。';
+  } catch (error) {
+    showResult(error, true);
+  }
+}
+
+function formData(form) {
+  const payload = {};
+  new FormData(form).forEach((value, key) => { if (value !== '') payload[key] = value; });
+  return payload;
+}
+
+function showResult(payload, isError) {
+  const node = document.getElementById('result');
+  node.textContent = (isError ? '操作失败：' : '') + JSON.stringify(payload, null, 2);
+  node.className = isError ? 'err' : 'ok';
+}
+
+async function registerExposure(event) {
+  event.preventDefault();
+  try {
+    const result = await api('/api/exposures', {method: 'POST', headers: HEADERS, body: JSON.stringify(formData(event.target))});
+    showResult(result);
+    await loadNetwork();
+  } catch (error) { showResult(error.payload || error.message, true); }
+  return false;
+}
+
+async function releaseContact(event) {
+  event.preventDefault();
+  const data = formData(event.target);
+  const contactId = data.contact_id;
+  delete data.contact_id;
+  try {
+    const result = await api('/api/entities/' + encodeURIComponent(contactId) + '/actions', {
+      method: 'POST', headers: HEADERS, body: JSON.stringify({action: 'release', data}),
+    });
+    showResult(result);
+    await loadNetwork();
+  } catch (error) { showResult(error.payload || error.message, true); }
+  return false;
+}
+
+async function postCreate(event, kind) {
+  event.preventDefault();
+  const data = formData(event.target);
+  if (data.symptoms) data.symptoms = data.symptoms.split(',').map((s) => s.trim());
+  try {
+    const result = await api('/api/' + kind, {method: 'POST', headers: HEADERS, body: JSON.stringify(data)});
+    showResult(result);
+  } catch (error) { showResult(error.payload || error.message, true); }
+  return false;
+}
+
+async function triage(event) {
+  event.preventDefault();
+  const data = formData(event.target);
+  const caseId = data.case_id; delete data.case_id;
+  try { showResult(await api('/api/entities/' + encodeURIComponent(caseId) + '/actions', {method: 'POST', headers: HEADERS, body: JSON.stringify({action: 'triage', data})})); }
+  catch (error) { showResult(error.payload || error.message, true); }
+  return false;
+}
+
+async function confirmCase(event) {
+  event.preventDefault();
+  const data = formData(event.target);
+  const caseId = data.case_id; delete data.case_id;
+  try {
+    const result = await api('/api/entities/' + encodeURIComponent(caseId) + '/actions', {method: 'POST', headers: HEADERS, body: JSON.stringify({action: 'lab_positive', data})});
+    showResult(result);
+  } catch (error) { showResult(error.payload || error.message, true); }
+  return false;
+}
+
+async function checkHealth() {
+  showResult(await api('/health'));
+}
+
+loadNetwork();
 </script>
 </body>
 </html>
