@@ -25,6 +25,15 @@ python3 app.py --db ./data.db --port 8303
 ## 核心对象
 
 - `case`：病例和调查状态；`contact`：接触者随访。
+- 病例确认（`confirmed`/`probable`）后可通过`register_exposure`动作登记来源病例、暴露时间和地点，系统据此串出传播链和代际。
+- 接触者可通过`release`动作解除（仅限未感染者），解除后其与病例的关联保留，传播链上下游关系仍可查询。
+
+## 接触网络规则
+
+- 同一病例与同一来源病例多次暴露时，只保留最近一次暴露记录。
+- 来源病例状态须为`confirmed`/`probable`/`recovered`/`closed`，否则关系不建立并说明原因。
+- 暴露时间晚于该病例发病日期时，关系不建立并说明原因。
+- 病例的主要传染来源取各来源中最近一次暴露，代际从链首（第1代）向下递增。
 
 ## 主要接口
 
@@ -33,6 +42,8 @@ python3 app.py --db ./data.db --port 8303
 - `POST /api/<kind>`：创建对象；请求体为JSON。
 - `GET /api/entities/<id>`：读取对象当前版本。
 - `POST /api/entities/<id>/actions`：提交`{"action":"动作名","data":{...},"expected_version":数字}`。
+- `GET /api/chains`：传播链列表，含链成员、代际和各链接触者（`pending_contacts`为待处理接触者）。
+- `GET /api/chains/<case_id>`：单个病例所在传播链及其上、下游病例。
 - `GET /api/audit`：读取审计记录。
 
 请求身份通过`X-User-Id`和`X-Role`请求头传入。创建和动作的可执行角色由规则引擎控制。

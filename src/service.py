@@ -2,7 +2,7 @@ from uuid import uuid4
 
 from .audit import AuditTrail
 from .domain import ConflictError, NotFoundError
-from .rules import RuleEngine
+from .rules import RuleEngine, build_chains, chain_lineage
 
 
 class DomainService:
@@ -68,6 +68,26 @@ class DomainService:
         if kind:
             kind = self.rules.normalize_kind(kind)
         return self.repository.list_entities(kind=kind, status=status)
+
+    def chains(self):
+        cases = self.repository.list_entities(kind="case")
+        contacts = self.repository.list_entities(kind="contact")
+        return build_chains(cases, contacts)
+
+    def chain_for(self, case_id):
+        case = self.repository.get_entity(case_id)
+        if not case or case["kind"] != "case":
+            raise NotFoundError("case not found: " + case_id)
+        for chain in self.chains():
+            if any(member["case_id"] == case_id for member in chain["members"]):
+                lineage = chain_lineage(chain, case_id)
+                return {
+                    "case_id": case_id,
+                    "chain": chain,
+                    "upstream": lineage["upstream"],
+                    "downstream": lineage["downstream"],
+                }
+        raise NotFoundError("case not found: " + case_id)
 
     def audit_log(self, entity_id=None):
         return self.repository.list_audit(entity_id=entity_id)
